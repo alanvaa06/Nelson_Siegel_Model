@@ -3,8 +3,8 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "nelson-siegel-model"
-version = "1.0.0"
+name = "nelson-siegel"
+version = "1.1.0"
 description = "Nelson-Siegel Model for Yield Curve Analysis with Treasury and TIPS data"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -63,28 +63,49 @@ data = [
 notebooks = [
     "ipywidgets>=7.6.0",
     "jupyter>=1.0.0",
-    "jupyterlab>=3.0.0", 
+    "jupyterlab>=3.0.0",
     "notebook>=6.0.0",
     "nbformat>=5.0.0",
     "jupyter-widgets>=7.6.0",
     "fredapi>=0.4.3",
 ]
+webapp = [
+    "flask>=2.2.0",
+    "werkzeug>=2.2.0",
+]
+all = [
+    "ipywidgets>=7.6.0",
+    "jupyter>=1.0.0",
+    "jupyterlab>=3.0.0",
+    "fredapi>=0.4.3",
+    "yfinance>=0.1.87",
+    "flask>=2.2.0",
+    "werkzeug>=2.2.0",
+]
 
 [project.urls]
-Homepage = "https://github.com/economics-research/nelson-siegel-model"
-Documentation = "https://nelson-siegel-model.readthedocs.io/"
-Repository = "https://github.com/economics-research/nelson-siegel-model.git"
-"Bug Tracker" = "https://github.com/economics-research/nelson-siegel-model/issues"
+Homepage = "https://github.com/alanvaa06/nelson-siegel"
+Documentation = "https://nelson-siegel.readthedocs.io/"
+Repository = "https://github.com/alanvaa06/nelson-siegel.git"
+"Bug Tracker" = "https://github.com/alanvaa06/nelson-siegel/issues"
 
 [project.scripts]
-nelson-siegel-analysis = "nelson_siegel.analysis:main"
+nelson-siegel-web = "nelson_siegel.webapp.app:run_app"
 
 [tool.setuptools]
-packages = ["nelson_siegel"]
 package-dir = {"" = "src"}
 
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["nelson_siegel*"]
+
 [tool.setuptools.package-data]
-nelson_siegel = ["py.typed"]
+nelson_siegel = [
+    "py.typed",
+    "webapp/templates/*.html",
+    "webapp/static/css/*.css",
+    "webapp/static/js/*.js",
+]
 
 [tool.black]
 line-length = 100

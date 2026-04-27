@@ -5,7 +5,7 @@ This document describes the complete architecture of the Nelson-Siegel yield cur
 ## 📁 Repository Structure
 
 ```
-nelson-siegel-model/
+nelson-siegel/
 ├── 📁 src/nelson_siegel/           # Main package source code
 │   ├── __init__.py                 # Package initialization with smart imports
 │   ├── model.py                    # Core Nelson-Siegel models
@@ -269,7 +269,7 @@ binder/
 #### **Google Colab Support**
 ```python
 # Automatic dependency installation
-!pip install git+https://github.com/repo/nelson-siegel-model.git[interactive]
+!pip install "git+https://github.com/alanvaa06/nelson-siegel.git#egg=nelson-siegel[interactive]"
 ```
 
 ### **Package Distribution**

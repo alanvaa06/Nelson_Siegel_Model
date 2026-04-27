@@ -237,8 +237,8 @@ After completing the notebook, users will:
 ## 📞 Support
 
 For notebook-specific issues:
-- **GitHub Issues**: [Repository Issues](https://github.com/economics-research/nelson-siegel-model/issues)
-- **Documentation**: [Project Documentation](https://nelson-siegel-model.readthedocs.io/)
+- **GitHub Issues**: [Repository Issues](https://github.com/alanvaa06/nelson-siegel/issues)
+- **Documentation**: [Project Documentation](https://nelson-siegel.readthedocs.io/)
 - **Email**: research@example.com
 
 For Jupyter/widget issues:

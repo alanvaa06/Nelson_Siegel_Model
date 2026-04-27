@@ -118,7 +118,7 @@ print("✅ Installation successful!")
 1. Click the "Open in Colab" badge in the notebook
 2. Run the first cell to install dependencies:
    ```python
-   !pip install git+https://github.com/economics-research/nelson-siegel-model.git[interactive]
+   !pip install git+https://github.com/alanvaa06/nelson-siegel.git[interactive]
    ```
 
 ### **Binder** (Pre-configured Environment)

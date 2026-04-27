@@ -127,8 +127,8 @@ This library provides **comprehensive interactive capabilities** through Jupyter
 ## 🆘 Support & Community
 
 ### **Getting Help**
-- 🐛 [GitHub Issues](https://github.com/economics-research/nelson-siegel-model/issues) - Bug reports and feature requests
-- 💬 [GitHub Discussions](https://github.com/economics-research/nelson-siegel-model/discussions) - Community Q&A
+- 🐛 [GitHub Issues](https://github.com/alanvaa06/nelson-siegel/issues) - Bug reports and feature requests
+- 💬 [GitHub Discussions](https://github.com/alanvaa06/nelson-siegel/discussions) - Community Q&A
 - 📧 [Email Support](mailto:research@example.com) - Direct support
 
 ### **Contributing**
@@ -137,7 +137,7 @@ This library provides **comprehensive interactive capabilities** through Jupyter
 - 🔀 [Pull Request Guidelines](../CONTRIBUTING.md) - Contribution process
 
 ### **Community**
-- 🌟 [GitHub Repository](https://github.com/economics-research/nelson-siegel-model)
+- 🌟 [GitHub Repository](https://github.com/alanvaa06/nelson-siegel)
 - 📱 [Twitter Updates](https://twitter.com/nelson_siegel_py)
 - 💼 [LinkedIn Group](https://linkedin.com/groups/nelson-siegel-users)
 
