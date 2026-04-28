@@ -342,10 +342,14 @@ def create_app(
             tips[col] = tips[col] * 100.0
         # Breakeven inflation (in %) = treasury level - tips level
         breakeven = (treasury["Level"] - tips["Level"]).astype(float)
+        # Tau is constant under the closed-form historical fit (one tau per
+        # bond type), so its correlation is undefined; skip it.
         correlations: Dict[str, float] = {}
-        for factor in ("Level", "Slope", "Curvature", "Tau"):
+        for factor in ("Level", "Slope", "Curvature"):
             if factor in treasury.columns and factor in tips.columns:
-                correlations[factor] = float(treasury[factor].corr(tips[factor]))
+                value = float(treasury[factor].corr(tips[factor]))
+                if not np.isnan(value):
+                    correlations[factor] = value
 
         total_observations = int(len(common_dates))
         if len(treasury) > 1500:
