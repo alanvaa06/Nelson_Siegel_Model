@@ -97,6 +97,42 @@ def test_estimate_global_tau_returns_finite_value():
     assert analyzer._global_tau["treasury"] == tau
 
 
+def test_factor_time_series_parity_with_variable_tau():
+    """New fixed-tau historical fit should track the per-date variable-tau path."""
+    from nelson_siegel.model import TreasuryNelsonSiegelModel
+
+    rng = np.random.default_rng(7)
+    maturities = np.array([0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0, 20.0, 30.0])
+    n = 200
+    dates = pd.date_range("2020-01-01", periods=n, freq="W-FRI")
+    level = 0.03 + 0.005 * np.sin(np.linspace(0, 6, n))
+    slope = -0.01 + 0.003 * np.cos(np.linspace(0, 5, n))
+    curve = 0.005 + 0.002 * rng.standard_normal(n)
+    tau = 1.4 + 0.1 * np.sin(np.linspace(0, 4, n))
+    Y = np.vstack([
+        NelsonSiegelModel.model_function(maturities, level[i], slope[i], curve[i], tau[i])
+        for i in range(n)
+    ])
+    frame = pd.DataFrame(Y, index=dates, columns=maturities)
+
+    # Reference: per-date variable-tau curve_fit (the prior implementation).
+    ref_levels, ref_slopes, ref_curvs = [], [], []
+    for _, row in frame.iterrows():
+        m = TreasuryNelsonSiegelModel()
+        m.fit(maturities, row.values)
+        ref_levels.append(m.parameters["beta0"])
+        ref_slopes.append(m.parameters["beta1"])
+        ref_curvs.append(m.parameters["beta2"])
+
+    # New path: fixed-tau closed-form, tau picked once.
+    fixed_tau = float(np.median(tau))
+    batch = YieldCurveAnalyzer._batch_fit_factors(frame, fixed_tau)
+
+    assert np.corrcoef(batch["Level"].values, ref_levels)[0, 1] >= 0.95
+    assert np.corrcoef(batch["Slope"].values, ref_slopes)[0, 1] >= 0.95
+    assert np.corrcoef(batch["Curvature"].values, ref_curvs)[0, 1] >= 0.95
+
+
 def test_analyze_historical_factors_speed_under_one_second():
     analyzer = YieldCurveAnalyzer()
     start = (pd.Timestamp.today() - pd.DateOffset(years=5)).strftime("%Y-%m-%d")
