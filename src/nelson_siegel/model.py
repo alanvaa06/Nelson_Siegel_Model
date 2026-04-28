@@ -78,6 +78,52 @@ class NelsonSiegelModel:
         
         return beta0 + beta1 * term1 + beta2 * term2
     
+    @staticmethod
+    def basis(maturities: Union[list, np.ndarray], tau: float) -> np.ndarray:
+        """Return the Nelson-Siegel design matrix at given maturities and tau.
+
+        Columns: [1, f1(t), f2(t)] where
+            f1(t) = (1 - exp(-t/tau)) / (t/tau)   (limit 1 at t=0)
+            f2(t) = f1(t) - exp(-t/tau)           (limit 0 at t=0)
+        """
+        if tau <= 0:
+            raise ValueError("tau must be strictly positive")
+        t = np.asarray(maturities, dtype=float)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            scaled = t / tau
+            exp_term = np.exp(-scaled)
+            f1 = np.where(t == 0, 1.0, (1.0 - exp_term) / np.where(scaled == 0, 1.0, scaled))
+            f2 = np.where(t == 0, 0.0, f1 - exp_term)
+        ones = np.ones_like(t)
+        return np.column_stack([ones, f1, f2])
+
+    def fit_fixed_tau(
+        self,
+        maturities: Union[list, np.ndarray],
+        yields: Union[list, np.ndarray],
+        tau: float,
+    ) -> 'NelsonSiegelModel':
+        """Closed-form least-squares fit with tau held fixed."""
+        maturities = np.asarray(maturities, dtype=float)
+        yields = np.asarray(yields, dtype=float)
+        if len(maturities) != len(yields):
+            raise ValueError("Maturities and yields must have the same length")
+        mask = ~(np.isnan(maturities) | np.isnan(yields))
+        m_clean = maturities[mask]
+        y_clean = yields[mask]
+        if len(m_clean) < 3:
+            raise ValueError("Need at least 3 valid points for fixed-tau fit")
+        X = self.basis(m_clean, tau)
+        betas, *_ = np.linalg.lstsq(X, y_clean, rcond=None)
+        self.parameters = {
+            'beta0': float(betas[0]),
+            'beta1': float(betas[1]),
+            'beta2': float(betas[2]),
+            'tau': float(tau),
+        }
+        self.fitted = True
+        return self
+
     def fit(
         self,
         maturities: Union[list, np.ndarray],

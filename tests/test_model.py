@@ -225,6 +225,52 @@ class TestNelsonSiegelModel:
         assert "Tau=" in repr_str
 
 
+class TestFixedTauHelpers:
+    """Closed-form Diebold-Li helpers used by the historical fit path."""
+
+    def test_basis_shape_and_t_zero_limits(self):
+        maturities = np.array([0.0, 0.5, 1.0, 5.0, 30.0])
+        X = NelsonSiegelModel.basis(maturities, tau=1.5)
+
+        assert X.shape == (5, 3)
+        assert np.allclose(X[:, 0], 1.0)
+        # At t=0, f1 -> 1 and f2 -> 0
+        assert np.isclose(X[0, 1], 1.0)
+        assert np.isclose(X[0, 2], 0.0)
+
+    def test_basis_rejects_non_positive_tau(self):
+        with pytest.raises(ValueError, match="tau must be strictly positive"):
+            NelsonSiegelModel.basis(np.array([1.0, 2.0]), tau=0.0)
+
+    def test_fit_fixed_tau_recovers_known_betas(self):
+        maturities = np.array([0.5, 1, 2, 3, 5, 7, 10, 20, 30], dtype=float)
+        true_tau = 1.7
+        true_betas = (0.04, -0.012, 0.018)
+        beta0, beta1, beta2 = true_betas
+        yields = NelsonSiegelModel.model_function(maturities, beta0, beta1, beta2, true_tau)
+
+        model = NelsonSiegelModel()
+        model.fit_fixed_tau(maturities, yields, tau=true_tau)
+
+        assert model.fitted is True
+        assert np.isclose(model.parameters['beta0'], beta0, atol=1e-10)
+        assert np.isclose(model.parameters['beta1'], beta1, atol=1e-10)
+        assert np.isclose(model.parameters['beta2'], beta2, atol=1e-10)
+        assert model.parameters['tau'] == true_tau
+
+    def test_fit_fixed_tau_too_few_points(self):
+        model = NelsonSiegelModel()
+        with pytest.raises(ValueError, match="at least 3 valid points"):
+            model.fit_fixed_tau(np.array([1.0, 2.0]), np.array([0.02, 0.025]), tau=1.5)
+
+    def test_fit_fixed_tau_drops_nans(self):
+        maturities = np.array([1, 2, 3, 5, np.nan, 10], dtype=float)
+        yields = np.array([0.02, 0.025, 0.028, 0.032, 0.035, 0.04], dtype=float)
+        model = NelsonSiegelModel()
+        model.fit_fixed_tau(maturities, yields, tau=1.5)
+        assert model.fitted is True
+
+
 class TestTreasuryNelsonSiegelModel:
     """Test cases for the Treasury-specific model."""
     
