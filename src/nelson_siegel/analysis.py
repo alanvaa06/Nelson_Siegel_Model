@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 from typing import Dict, Optional, List, Tuple
+from concurrent.futures import ThreadPoolExecutor
 import warnings
 
 from .model import NelsonSiegelModel, TreasuryNelsonSiegelModel, TIPSNelsonSiegelModel
@@ -34,12 +35,26 @@ class YieldCurveAnalyzer:
         self.data_manager = DataManager(fred_api_key)
         self.treasury_model = TreasuryNelsonSiegelModel()
         self.tips_model = TIPSNelsonSiegelModel()
-        
-    def analyze_historical_factors(self, 
-                                 bond_type: str,
-                                 start_date: Optional[str] = None,
-                                 end_date: Optional[str] = None,
-                                 min_data_points: int = 3) -> pd.DataFrame:
+
+    @staticmethod
+    def _resample_long_range(data: pd.DataFrame) -> pd.DataFrame:
+        """Downsample long date ranges for interactive speed."""
+        if data.empty:
+            return data
+        span_days = (data.index.max() - data.index.min()).days
+        if span_days <= 365:
+            return data
+        sampled = data.resample("W-FRI").last().dropna(how="all")
+        return sampled if not sampled.empty else data
+
+    def analyze_historical_factors(
+        self,
+        bond_type: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        min_data_points: int = 3,
+        verbose: bool = False,
+    ) -> pd.DataFrame:
         """
         Calculate historical Nelson-Siegel factors for a bond type.
         
@@ -77,17 +92,23 @@ class YieldCurveAnalyzer:
         
         if data.empty:
             raise ValueError(f"No {bond_type} data available for the specified period")
-        
-        print(f"Analyzing {bond_type} data: {len(data)} observations")
-        print(f"Date range: {data.index[0].strftime('%Y-%m-%d')} to {data.index[-1].strftime('%Y-%m-%d')}")
-        print(f"Maturities: {list(data.columns)} years")
-        
+
+        data = self._resample_long_range(data)
+        if verbose:
+            print(f"Analyzing {bond_type} data: {len(data)} observations")
+            print(
+                f"Date range: {data.index[0].strftime('%Y-%m-%d')} to "
+                f"{data.index[-1].strftime('%Y-%m-%d')}"
+            )
+            print(f"Maturities: {list(data.columns)} years")
+
         factors_list = []
         failed_dates = []
-        
+        model = model_class()
+        warm_start: Optional[Tuple[float, float, float, float]] = None
         total_dates = len(data)
         for i, (date, row) in enumerate(data.iterrows()):
-            if i % max(1, total_dates // 20) == 0:  # Progress every 5%
+            if verbose and i % max(1, total_dates // 20) == 0:  # Progress every 5%
                 print(f"Progress: {i}/{total_dates} ({100*i/total_dates:.1f}%)")
             
             # Get yields and maturities for this date
@@ -103,35 +124,41 @@ class YieldCurveAnalyzer:
             # Use only valid data points
             valid_yields = yields[valid_mask]
             valid_maturities = maturities[valid_mask]
-            
+
             try:
                 # Fit model for this date
-                model = model_class()
-                model.fit(valid_maturities, valid_yields)
+                model.fit(valid_maturities, valid_yields, initial_guess=warm_start)
                 factors = model.get_factors()
-                
+
                 factors_series = pd.Series({
                     'Level': factors['Level'],
                     'Slope': factors['Slope'],
                     'Curvature': factors['Curvature'],
                     'Tau': factors['Tau']
                 }, name=date)
-                
+
                 factors_list.append(factors_series)
-                
-            except Exception as e:
+                warm_start = (
+                    float(model.parameters["beta0"]),
+                    float(model.parameters["beta1"]),
+                    float(model.parameters["beta2"]),
+                    float(model.parameters["tau"]),
+                )
+
+            except Exception:
                 failed_dates.append(date)
                 continue
-        
+
         if not factors_list:
             raise ValueError(f"Could not fit model for any dates in {bond_type} data")
-        
+
         factors_df = pd.DataFrame(factors_list)
-        
-        print(f"Successfully fitted {len(factors_df)} out of {total_dates} dates")
-        if failed_dates:
-            print(f"Failed dates: {len(failed_dates)} ({100*len(failed_dates)/total_dates:.1f}%)")
-        
+
+        if verbose:
+            print(f"Successfully fitted {len(factors_df)} out of {total_dates} dates")
+            if failed_dates:
+                print(f"Failed dates: {len(failed_dates)} ({100*len(failed_dates)/total_dates:.1f}%)")
+
         return factors_df
     
     def analyze_single_curve(self, 
@@ -209,9 +236,12 @@ class YieldCurveAnalyzer:
             'bond_classification': model.classify_bonds(maturities, yields)
         }
     
-    def compare_curves(self, 
-                      start_date: Optional[str] = None,
-                      end_date: Optional[str] = None) -> Dict:
+    def compare_curves(
+        self,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        verbose: bool = False,
+    ) -> Dict:
         """
         Compare Treasury and TIPS yield curves over time.
         
@@ -227,11 +257,28 @@ class YieldCurveAnalyzer:
         dict
             Comparison results including aligned factors and statistics
         """
-        print("Analyzing Treasury factors...")
-        treasury_factors = self.analyze_historical_factors('treasury', start_date, end_date)
-        
-        print("Analyzing TIPS factors...")
-        tips_factors = self.analyze_historical_factors('tips', start_date, end_date)
+        if verbose:
+            print("Analyzing Treasury and TIPS factors...")
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            treasury_future = executor.submit(
+                self.analyze_historical_factors,
+                "treasury",
+                start_date,
+                end_date,
+                3,
+                verbose,
+            )
+            tips_future = executor.submit(
+                self.analyze_historical_factors,
+                "tips",
+                start_date,
+                end_date,
+                3,
+                verbose,
+            )
+            treasury_factors = treasury_future.result()
+            tips_factors = tips_future.result()
         
         # Align dates
         common_dates = treasury_factors.index.intersection(tips_factors.index)

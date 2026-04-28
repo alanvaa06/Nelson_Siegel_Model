@@ -55,16 +55,19 @@ nelson-siegel/
 ## 🎯 Design Philosophy
 
 ### **1. Modular Architecture**
+
 - **Separation of concerns**: Each module has a specific purpose
 - **Clean interfaces**: Well-defined APIs between components
 - **Optional dependencies**: Interactive features don't break core functionality
 
 ### **2. Progressive Enhancement**
+
 - **Core functionality**: Works without interactive components
 - **Enhanced experience**: Rich features with Jupyter widgets
 - **Graceful degradation**: Fallbacks when widgets unavailable
 
 ### **3. Educational Focus**
+
 - **Learning-first design**: Structure supports educational use
 - **Interactive exploration**: Hands-on parameter manipulation
 - **Economic context**: Every feature includes economic interpretation
@@ -260,6 +263,7 @@ jupyter lab examples/Nelson_Siegel_Interactive_Analysis.ipynb
 ### **Cloud Deployment**
 
 #### **Binder Configuration**
+
 ```
 binder/
 ├── requirements.txt        # Python dependencies
@@ -267,6 +271,7 @@ binder/
 ```
 
 #### **Google Colab Support**
+
 ```python
 # Automatic dependency installation
 !pip install "git+https://github.com/alanvaa06/nelson-siegel.git#egg=nelson-siegel[interactive]"
@@ -297,6 +302,8 @@ graph TD
     H --> I[Jupyter Notebook]
 ```
 
+
+
 ### **Interactive Flow**
 
 ```mermaid
@@ -308,6 +315,8 @@ graph TD
     E --> F[Economic Interpretation]
     F --> G[Educational Content]
 ```
+
+
 
 ## 🎛️ Widget Architecture
 

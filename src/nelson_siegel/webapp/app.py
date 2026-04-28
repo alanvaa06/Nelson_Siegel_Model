@@ -66,12 +66,44 @@ def create_app(fred_api_key: Optional[str] = None) -> Flask:
         template_folder="templates",
         static_folder="static",
     )
-    api_key = fred_api_key or os.environ.get("FRED_API_KEY")
-    analyzer = YieldCurveAnalyzer(fred_api_key=api_key)
-    data_manager = DataManager(fred_api_key=api_key)
-    app.config["ANALYZER"] = analyzer
-    app.config["DATA_MANAGER"] = data_manager
-    app.config["FRED_KEY_PRESENT"] = bool(api_key)
+
+    def configure_data_source(api_key: Optional[str]) -> None:
+        normalized_key = api_key.strip() if api_key else None
+        app.config["ANALYZER"] = YieldCurveAnalyzer(fred_api_key=normalized_key)
+        app.config["DATA_MANAGER"] = DataManager(fred_api_key=normalized_key)
+        app.config["FRED_KEY_PRESENT"] = bool(normalized_key)
+        app.config["FACTORS_CACHE"] = {}
+
+    def _cache_key(bond_type: str, start_date: Optional[str], end_date: Optional[str]) -> tuple:
+        return (
+            bond_type.lower(),
+            start_date or "",
+            end_date or "",
+            "auto_weekly_over_1y",
+            bool(app.config["FRED_KEY_PRESENT"]),
+        )
+
+    def _get_cached_factors(
+        bond_type: str,
+        start_date: Optional[str],
+        end_date: Optional[str],
+    ) -> pd.DataFrame:
+        cache = app.config["FACTORS_CACHE"]
+        key = _cache_key(bond_type, start_date, end_date)
+        cached = cache.get(key)
+        if cached is not None:
+            return cached.copy()
+
+        analyzer = app.config["ANALYZER"]
+        factors = analyzer.analyze_historical_factors(
+            bond_type=bond_type,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        cache[key] = factors.copy()
+        return factors
+
+    configure_data_source(fred_api_key or os.environ.get("FRED_API_KEY"))
 
     @app.get("/")
     def index() -> str:
@@ -87,6 +119,22 @@ def create_app(fred_api_key: Optional[str] = None) -> Flask:
                 "status": "ok",
                 "fred_api_key": app.config["FRED_KEY_PRESENT"],
                 "timestamp": datetime.utcnow().isoformat() + "Z",
+            }
+        )
+
+    @app.post("/api/fred-key")
+    def set_fred_key() -> Any:
+        """Set the FRED API key for this running app process only."""
+        payload = request.get_json(silent=True) or {}
+        api_key = str(payload.get("api_key", "")).strip()
+        if not api_key:
+            return jsonify({"error": "FRED API key is required."}), 400
+
+        configure_data_source(api_key)
+        return jsonify(
+            {
+                "fred_api_key": app.config["FRED_KEY_PRESENT"],
+                "message": "FRED API key set for this session.",
             }
         )
 
@@ -174,6 +222,7 @@ def create_app(fred_api_key: Optional[str] = None) -> Flask:
         """Return latest available yield curve and its NS fit for a bond type."""
         bond_type = request.args.get("bond_type", "treasury").lower()
         try:
+            data_manager = app.config["DATA_MANAGER"]
             if bond_type == "tips":
                 data = data_manager.get_tips_data()
             else:
@@ -225,7 +274,7 @@ def create_app(fred_api_key: Optional[str] = None) -> Flask:
             return jsonify({"error": "bond_type must be 'treasury' or 'tips'."}), 400
 
         try:
-            factors = analyzer.analyze_historical_factors(
+            factors = _get_cached_factors(
                 bond_type=bond_type,
                 start_date=start_date,
                 end_date=end_date,
@@ -269,17 +318,33 @@ def create_app(fred_api_key: Optional[str] = None) -> Flask:
         start_date = request.args.get("start")
         end_date = request.args.get("end")
         try:
-            comparison = analyzer.compare_curves(start_date, end_date)
+            treasury_factors = _get_cached_factors("treasury", start_date, end_date)
+            tips_factors = _get_cached_factors("tips", start_date, end_date)
         except Exception as exc:  # noqa: BLE001
             return jsonify({"error": str(exc)}), 422
 
-        treasury = comparison["treasury_aligned"].copy()
-        tips = comparison["tips_aligned"].copy()
+        common_dates = treasury_factors.index.intersection(tips_factors.index)
+        if len(common_dates) == 0:
+            return jsonify({"error": "No common dates found between Treasury and TIPS data"}), 422
+
+        treasury = treasury_factors.loc[common_dates].copy()
+        tips = tips_factors.loc[common_dates].copy()
         for col in ("Level", "Slope", "Curvature"):
             treasury[col] = treasury[col] * 100.0
             tips[col] = tips[col] * 100.0
         # Breakeven inflation (in %) = treasury level - tips level
         breakeven = (treasury["Level"] - tips["Level"]).astype(float)
+        correlations: Dict[str, float] = {}
+        for factor in ("Level", "Slope", "Curvature", "Tau"):
+            if factor in treasury.columns and factor in tips.columns:
+                correlations[factor] = float(treasury[factor].corr(tips[factor]))
+
+        total_observations = int(len(common_dates))
+        if len(treasury) > 1500:
+            step = max(1, len(treasury) // 1500)
+            treasury = treasury.iloc[::step]
+            tips = tips.iloc[::step]
+            breakeven = breakeven.iloc[::step]
 
         return jsonify(
             {
@@ -289,8 +354,14 @@ def create_app(fred_api_key: Optional[str] = None) -> Flask:
                 "treasury_slope": treasury["Slope"].astype(float).tolist(),
                 "tips_slope": tips["Slope"].astype(float).tolist(),
                 "breakeven": breakeven.tolist(),
-                "correlations": {k: float(v) for k, v in comparison["correlations"].items()},
-                "summary": comparison["summary_stats"],
+                "correlations": correlations,
+                "summary": {
+                    "total_observations": total_observations,
+                    "date_range": {
+                        "start": common_dates[0].strftime("%Y-%m-%d"),
+                        "end": common_dates[-1].strftime("%Y-%m-%d"),
+                    },
+                },
                 "is_synthetic": not app.config["FRED_KEY_PRESENT"],
             }
         )

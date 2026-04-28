@@ -78,7 +78,12 @@ class NelsonSiegelModel:
         
         return beta0 + beta1 * term1 + beta2 * term2
     
-    def fit(self, maturities: Union[list, np.ndarray], yields: Union[list, np.ndarray]) -> 'NelsonSiegelModel':
+    def fit(
+        self,
+        maturities: Union[list, np.ndarray],
+        yields: Union[list, np.ndarray],
+        initial_guess: Optional[Tuple[float, float, float, float]] = None,
+    ) -> 'NelsonSiegelModel':
         """
         Fit the Nelson-Siegel model to observed yield data.
         
@@ -88,6 +93,8 @@ class NelsonSiegelModel:
             Yield maturities in years
         yields : array-like
             Observed yields (as decimals, e.g., 0.025 for 2.5%)
+        initial_guess : tuple of float, optional
+            Optional per-fit starting guess (beta0, beta1, beta2, tau).
         
         Returns:
         --------
@@ -117,11 +124,12 @@ class NelsonSiegelModel:
             raise ValueError("Insufficient valid data points after removing NaNs")
         
         try:
+            p0 = initial_guess if initial_guess is not None else self.initial_guess
             optimal_params, _ = curve_fit(
                 self.model_function,
                 maturities_clean,
                 yields_clean,
-                p0=self.initial_guess,
+                p0=p0,
                 bounds=self.bounds,
                 maxfev=10000
             )

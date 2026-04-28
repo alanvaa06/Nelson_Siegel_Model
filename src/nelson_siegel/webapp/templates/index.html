@@ -47,6 +47,25 @@
         </div>
       </div>
 
+      <form class="api-key-card" id="fred-key-form">
+        <label for="fred-api-key">
+          <span class="status-label">FRED API key</span>
+          <span class="api-key-copy">Use live Treasury and TIPS data.</span>
+        </label>
+        <div class="api-key-row">
+          <input
+            class="input"
+            id="fred-api-key"
+            type="password"
+            placeholder="Paste your FRED API key"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button class="btn small primary" type="submit">Apply</button>
+        </div>
+        <p class="api-key-note" id="fred-key-note">Stored only for this running app session.</p>
+      </form>
+
       <div class="footer-mini">
         <span>v1.1 &middot; MIT License</span>
         <a href="https://github.com/alanvaa06/nelson-siegel" target="_blank" rel="noreferrer">GitHub</a>
@@ -223,6 +242,7 @@
             <input type="date" id="cmp-start" class="input" />
             <input type="date" id="cmp-end" class="input" />
             <button class="btn primary" id="btn-cmp-run">Run comparison</button>
+            <span class="muted" id="cmp-status"></span>
           </div>
         </header>
 

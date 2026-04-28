@@ -164,7 +164,11 @@ class TreasuryDataDownloader(BaseDataDownloader):
         data_dict = {}
         for series_name, series_id in self.treasury_series.items():
             try:
-                series_data = fred.get_series(series_id, start=start_date, end=end_date)
+                series_data = fred.get_series(
+                    series_id,
+                    observation_start=start_date,
+                    observation_end=end_date,
+                )
                 maturity_years = self.maturity_mapping[series_name]
                 data_dict[maturity_years] = series_data / 100  # Convert percentage to decimal
             except Exception as e:
@@ -266,7 +270,11 @@ class TIPSDataDownloader(BaseDataDownloader):
         data_dict = {}
         for series_name, series_id in self.tips_series.items():
             try:
-                series_data = fred.get_series(series_id, start=start_date, end=end_date)
+                series_data = fred.get_series(
+                    series_id,
+                    observation_start=start_date,
+                    observation_end=end_date,
+                )
                 maturity_years = self.maturity_mapping[series_name]
                 data_dict[maturity_years] = series_data / 100  # Convert percentage to decimal
             except Exception as e:

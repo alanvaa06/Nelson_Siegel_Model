@@ -65,16 +65,50 @@
   });
 
   // ----- Status -----
+  function updateDataStatus(hasFredKey) {
+    document.body.dataset.fredKey = hasFredKey ? "true" : "false";
+    $("#data-source-text").textContent = hasFredKey
+      ? "FRED API (live)"
+      : "Synthetic demo";
+    $("#fred-key-note").textContent = hasFredKey
+      ? "Live data enabled for this app session."
+      : "Stored only for this running app session.";
+  }
+
   fetch("/api/health")
     .then((r) => r.json())
     .then((j) => {
-      $("#data-source-text").textContent = j.fred_api_key
-        ? "FRED API (live)"
-        : "Synthetic demo";
+      updateDataStatus(j.fred_api_key);
     })
     .catch(() => {
       $("#data-source-text").textContent = "Offline";
     });
+
+  $("#fred-key-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const input = $("#fred-api-key");
+    const apiKey = input.value.trim();
+    if (!apiKey) {
+      toast("Paste a FRED API key first.", "error");
+      input.focus();
+      return;
+    }
+
+    try {
+      const r = await fetch("/api/fred-key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_key: apiKey }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || "Could not set FRED API key.");
+      input.value = "";
+      updateDataStatus(j.fred_api_key);
+      toast("FRED API key applied. Load a snapshot to fetch live data.", "success");
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  });
 
   // ============================================================
   // CURVE FITTER
@@ -359,7 +393,7 @@
     $("#hist-end").value = today.toISOString().slice(0, 10);
     $("#hist-start").value = start.toISOString().slice(0, 10);
     $("#cmp-end").value = today.toISOString().slice(0, 10);
-    const cmpStart = new Date(today); cmpStart.setFullYear(today.getFullYear() - 3);
+    const cmpStart = new Date(today); cmpStart.setFullYear(today.getFullYear() - 1);
     $("#cmp-start").value = cmpStart.toISOString().slice(0, 10);
   })();
 
@@ -400,14 +434,25 @@
   // ============================================================
   // COMPARE
   // ============================================================
+  const cmpButton = $("#btn-cmp-run");
+  const cmpStatus = $("#cmp-status");
+
+  function setCompareStatus(text) {
+    if (cmpStatus) cmpStatus.textContent = text;
+  }
+
   $("#btn-cmp-run").addEventListener("click", async () => {
+    cmpButton.disabled = true;
+    setCompareStatus("Computing comparison...");
     const params = new URLSearchParams({
       start: $("#cmp-start").value,
       end: $("#cmp-end").value,
     });
     toast("Aligning Treasury and TIPS…");
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 45000);
     try {
-      const r = await fetch(`/api/compare?${params.toString()}`);
+      const r = await fetch(`/api/compare?${params.toString()}`, { signal: controller.signal });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || "Comparison failed.");
 
@@ -435,9 +480,19 @@
       $("#c-corr-level").textContent = fmt(j.correlations.Level, 3);
       $("#c-corr-slope").textContent = fmt(j.correlations.Slope, 3);
       $("#c-obs").textContent = (j.summary.total_observations || j.dates.length).toLocaleString();
+      setCompareStatus(`Loaded ${j.dates.length.toLocaleString()} points.`);
       toast("Comparison ready.", "success");
     } catch (err) {
-      toast(err.message, "error");
+      if (err.name === "AbortError") {
+        setCompareStatus("Timed out. Try a shorter date range.");
+        toast("Comparison timed out. Try a shorter date range.", "error");
+      } else {
+        setCompareStatus("Comparison failed.");
+        toast(err.message, "error");
+      }
+    } finally {
+      clearTimeout(timeoutId);
+      cmpButton.disabled = false;
     }
   });
 })();
