@@ -30,6 +30,8 @@ from ..model import (
     TIPSNelsonSiegelModel,
     TreasuryNelsonSiegelModel,
 )
+from ._factors_cache import FactorsCache
+from .warmup import cancel_warmup, start_warmup
 
 
 def _model_for(bond_type: str) -> NelsonSiegelModel:
@@ -59,20 +61,18 @@ def _factors_in_percent(factors: Dict[str, float]) -> Dict[str, float]:
     }
 
 
-def create_app(fred_api_key: Optional[str] = None) -> Flask:
+def create_app(
+    fred_api_key: Optional[str] = None,
+    *,
+    enable_warmup: bool = True,
+    warmup_years: int = 10,
+) -> Flask:
     """Build the Flask application with the Nelson-Siegel API wired in."""
     app = Flask(
         __name__,
         template_folder="templates",
         static_folder="static",
     )
-
-    def configure_data_source(api_key: Optional[str]) -> None:
-        normalized_key = api_key.strip() if api_key else None
-        app.config["ANALYZER"] = YieldCurveAnalyzer(fred_api_key=normalized_key)
-        app.config["DATA_MANAGER"] = DataManager(fred_api_key=normalized_key)
-        app.config["FRED_KEY_PRESENT"] = bool(normalized_key)
-        app.config["FACTORS_CACHE"] = {}
 
     def _cache_key(bond_type: str, start_date: Optional[str], end_date: Optional[str]) -> tuple:
         return (
@@ -88,20 +88,28 @@ def create_app(fred_api_key: Optional[str] = None) -> Flask:
         start_date: Optional[str],
         end_date: Optional[str],
     ) -> pd.DataFrame:
-        cache = app.config["FACTORS_CACHE"]
+        cache: FactorsCache = app.config["FACTORS_CACHE"]
         key = _cache_key(bond_type, start_date, end_date)
-        cached = cache.get(key)
-        if cached is not None:
-            return cached.copy()
 
-        analyzer = app.config["ANALYZER"]
-        factors = analyzer.analyze_historical_factors(
-            bond_type=bond_type,
-            start_date=start_date,
-            end_date=end_date,
-        )
-        cache[key] = factors.copy()
-        return factors
+        def _compute() -> pd.DataFrame:
+            analyzer = app.config["ANALYZER"]
+            return analyzer.analyze_historical_factors(
+                bond_type=bond_type,
+                start_date=start_date,
+                end_date=end_date,
+            )
+
+        return cache.get_or_compute(key, _compute)
+
+    def configure_data_source(api_key: Optional[str]) -> None:
+        normalized_key = api_key.strip() if api_key else None
+        cancel_warmup(app)
+        app.config["ANALYZER"] = YieldCurveAnalyzer(fred_api_key=normalized_key)
+        app.config["DATA_MANAGER"] = DataManager(fred_api_key=normalized_key)
+        app.config["FRED_KEY_PRESENT"] = bool(normalized_key)
+        app.config["FACTORS_CACHE"] = FactorsCache()
+        if enable_warmup:
+            start_warmup(app, _get_cached_factors, years=warmup_years)
 
     configure_data_source(fred_api_key or os.environ.get("FRED_API_KEY"))
 

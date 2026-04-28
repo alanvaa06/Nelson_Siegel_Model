@@ -1,14 +1,16 @@
 """Tests for the Nelson-Siegel web application."""
 
+import threading
 import time
 import pandas as pd
 
 from nelson_siegel.webapp.app import create_app
+from nelson_siegel.webapp.warmup import WARMUP_THREAD_KEY
 
 
 def test_index_requests_fred_api_key_when_missing():
     """The UI should make it obvious where a FRED key can be entered."""
-    app = create_app()
+    app = create_app(enable_warmup=False)
 
     with app.test_client() as client:
         response = client.get("/")
@@ -21,7 +23,7 @@ def test_index_requests_fred_api_key_when_missing():
 
 def test_fred_key_endpoint_updates_runtime_data_source():
     """Submitting a key should switch the running app to FRED-backed mode."""
-    app = create_app()
+    app = create_app(enable_warmup=False)
 
     with app.test_client() as client:
         response = client.post("/api/fred-key", json={"api_key": "abc123"})
@@ -34,7 +36,7 @@ def test_fred_key_endpoint_updates_runtime_data_source():
 
 def test_fred_key_endpoint_rejects_blank_keys():
     """Blank submissions should not overwrite the current data source."""
-    app = create_app()
+    app = create_app(enable_warmup=False)
 
     with app.test_client() as client:
         response = client.post("/api/fred-key", json={"api_key": "  "})
@@ -58,7 +60,7 @@ def _fake_factors_frame() -> pd.DataFrame:
 
 def test_compare_endpoint_three_year_range_returns_quickly():
     """The compare endpoint should return in interactive time for long ranges."""
-    app = create_app()
+    app = create_app(enable_warmup=False)
 
     with app.test_client() as client:
         started = time.perf_counter()
@@ -76,7 +78,7 @@ def test_compare_endpoint_three_year_range_returns_quickly():
 
 def test_compare_endpoint_uses_cache_for_repeat_calls(monkeypatch):
     """Second compare request should be substantially faster via cache hit."""
-    app = create_app()
+    app = create_app(enable_warmup=False)
     analyzer = app.config["ANALYZER"]
 
     def fake_analyze_historical_factors(*args, **kwargs):
@@ -101,7 +103,7 @@ def test_compare_endpoint_uses_cache_for_repeat_calls(monkeypatch):
 
 def test_fred_key_change_invalidates_compare_cache(monkeypatch):
     """Changing the runtime key should reset cached factor frames."""
-    app = create_app()
+    app = create_app(enable_warmup=False)
     calls = {"count": 0}
 
     def fake_analyze_historical_factors(self, *args, **kwargs):
@@ -124,3 +126,61 @@ def test_fred_key_change_invalidates_compare_cache(monkeypatch):
     assert set_key.status_code == 200
     assert third.status_code == 200
     assert calls["count"] == 4
+
+
+def test_warmup_populates_cache_for_recent_range(monkeypatch):
+    """Background warm-up should populate the cache before user requests hit."""
+    calls = {"count": 0}
+
+    def fake(self, *args, **kwargs):
+        calls["count"] += 1
+        return _fake_factors_frame()
+
+    monkeypatch.setattr(
+        "nelson_siegel.analysis.YieldCurveAnalyzer.analyze_historical_factors",
+        fake,
+    )
+
+    app = create_app(enable_warmup=True, warmup_years=10)
+    thread = app.config[WARMUP_THREAD_KEY]
+    thread.join(timeout=5.0)
+
+    assert not thread.is_alive()
+    assert calls["count"] == 2  # treasury + tips, no extra calls
+
+
+def test_fred_key_change_cancels_and_restarts_warmup(monkeypatch):
+    """POST /api/fred-key should cancel the prior warm-up thread and start a new one."""
+    block = threading.Event()
+    started = threading.Event()
+    proceed = threading.Event()
+
+    def slow_fake(self, bond_type, start_date=None, end_date=None, **_):
+        # First warm-up blocks until released so we can race a key change.
+        if not block.is_set():
+            started.set()
+            proceed.wait(timeout=5.0)
+        return _fake_factors_frame()
+
+    monkeypatch.setattr(
+        "nelson_siegel.analysis.YieldCurveAnalyzer.analyze_historical_factors",
+        slow_fake,
+    )
+
+    app = create_app(enable_warmup=True, warmup_years=10)
+    first_thread = app.config[WARMUP_THREAD_KEY]
+    assert started.wait(timeout=5.0)
+
+    with app.test_client() as client:
+        block.set()
+        proceed.set()
+        # Trigger key change while first warm-up is still in flight.
+        response = client.post("/api/fred-key", json={"api_key": "new-key"})
+
+    second_thread = app.config[WARMUP_THREAD_KEY]
+    second_thread.join(timeout=5.0)
+    first_thread.join(timeout=5.0)
+
+    assert response.status_code == 200
+    assert second_thread is not first_thread
+    assert not second_thread.is_alive()
