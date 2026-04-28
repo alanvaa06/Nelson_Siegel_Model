@@ -18,15 +18,18 @@ from .data import DataManager
 warnings.filterwarnings('ignore')
 
 
+_DEFAULT_TAU = {"treasury": 1.37, "tips": 2.0}
+
+
 class YieldCurveAnalyzer:
     """
     High-level analyzer for yield curve data and Nelson-Siegel factors.
     """
-    
+
     def __init__(self, fred_api_key: Optional[str] = None):
         """
         Initialize the yield curve analyzer.
-        
+
         Parameters:
         -----------
         fred_api_key : str, optional
@@ -35,6 +38,7 @@ class YieldCurveAnalyzer:
         self.data_manager = DataManager(fred_api_key)
         self.treasury_model = TreasuryNelsonSiegelModel()
         self.tips_model = TIPSNelsonSiegelModel()
+        self._global_tau: Dict[str, float] = {}
 
     @staticmethod
     def _resample_long_range(data: pd.DataFrame) -> pd.DataFrame:
@@ -46,6 +50,86 @@ class YieldCurveAnalyzer:
             return data
         sampled = data.resample("W-FRI").last().dropna(how="all")
         return sampled if not sampled.empty else data
+
+    def _estimate_global_tau(self, bond_type: str, min_data_points: int = 3) -> float:
+        """Pick one representative tau per bond type via a single variable-tau fit.
+
+        Fits the most recent valid curve with the bound-equipped Treasury or TIPS
+        model. Falls back to a literature default if data or the fit fails.
+        """
+        bond_key = bond_type.lower()
+        if bond_key in self._global_tau:
+            return self._global_tau[bond_key]
+
+        if bond_key == "treasury":
+            data = self.data_manager.get_treasury_data()
+            model = TreasuryNelsonSiegelModel()
+        else:
+            data = self.data_manager.get_tips_data()
+            model = TIPSNelsonSiegelModel()
+
+        try:
+            if data is None or data.empty:
+                raise ValueError("no data for tau estimation")
+            valid_counts = data.notna().sum(axis=1)
+            usable = data.loc[valid_counts >= min_data_points].dropna(how="all")
+            if usable.empty:
+                raise ValueError("no rows with enough valid maturities")
+            row = usable.iloc[-1].dropna()
+            maturities = np.asarray(row.index, dtype=float)
+            yields = np.asarray(row.values, dtype=float)
+            model.fit(maturities, yields)
+            tau = float(model.parameters["tau"])
+        except Exception:
+            tau = _DEFAULT_TAU[bond_key]
+            warnings.warn(
+                f"Falling back to default tau={tau} for {bond_key}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+        self._global_tau[bond_key] = tau
+        return tau
+
+    @staticmethod
+    def _batch_fit_factors(
+        yields_df: pd.DataFrame,
+        tau: float,
+        min_data_points: int = 3,
+    ) -> pd.DataFrame:
+        """Closed-form vectorized fit. Groups rows by NaN mask, one lstsq per group."""
+        if yields_df.empty:
+            return pd.DataFrame(columns=["Level", "Slope", "Curvature", "Tau"])
+
+        maturities = np.asarray(yields_df.columns, dtype=float)
+        X_full = NelsonSiegelModel.basis(maturities, tau)
+        Y = yields_df.to_numpy(dtype=float)
+        valid = ~np.isnan(Y)
+
+        n_rows, n_cols = Y.shape
+        # Pack each row's mask into a single integer key for fast grouping.
+        powers = np.power(2, np.arange(n_cols, dtype=np.uint64))
+        mask_keys = (valid.astype(np.uint64) * powers).sum(axis=1)
+
+        result = np.full((n_rows, 3), np.nan, dtype=float)
+        for key in np.unique(mask_keys):
+            group_idx = np.where(mask_keys == key)[0]
+            row = valid[group_idx[0]]
+            if row.sum() < min_data_points:
+                continue
+            X_g = X_full[row]
+            Y_g = Y[np.ix_(group_idx, row)]
+            betas, *_ = np.linalg.lstsq(X_g, Y_g.T, rcond=None)
+            result[group_idx] = betas.T
+
+        df = pd.DataFrame(
+            result,
+            index=yields_df.index,
+            columns=["Level", "Slope", "Curvature"],
+        )
+        df = df.dropna(how="any")
+        df["Tau"] = float(tau)
+        return df
 
     def analyze_historical_factors(
         self,
@@ -85,15 +169,17 @@ class YieldCurveAnalyzer:
         # Get data
         if bond_type.lower() == 'treasury':
             data = self.data_manager.get_treasury_data(start_date, end_date)
-            model_class = TreasuryNelsonSiegelModel
         else:
             data = self.data_manager.get_tips_data(start_date, end_date)
-            model_class = TIPSNelsonSiegelModel
         
         if data.empty:
             raise ValueError(f"No {bond_type} data available for the specified period")
 
         data = self._resample_long_range(data)
+        data = data.dropna(how="all")
+        if data.empty:
+            raise ValueError(f"No {bond_type} data available for the specified period")
+
         if verbose:
             print(f"Analyzing {bond_type} data: {len(data)} observations")
             print(
@@ -102,62 +188,17 @@ class YieldCurveAnalyzer:
             )
             print(f"Maturities: {list(data.columns)} years")
 
-        factors_list = []
-        failed_dates = []
-        model = model_class()
-        warm_start: Optional[Tuple[float, float, float, float]] = None
-        total_dates = len(data)
-        for i, (date, row) in enumerate(data.iterrows()):
-            if verbose and i % max(1, total_dates // 20) == 0:  # Progress every 5%
-                print(f"Progress: {i}/{total_dates} ({100*i/total_dates:.1f}%)")
-            
-            # Get yields and maturities for this date
-            yields = row.values
-            maturities = np.array(data.columns)
-            
-            # Skip if too many missing values
-            valid_mask = ~np.isnan(yields)
-            if valid_mask.sum() < min_data_points:
-                failed_dates.append(date)
-                continue
-            
-            # Use only valid data points
-            valid_yields = yields[valid_mask]
-            valid_maturities = maturities[valid_mask]
+        tau = self._estimate_global_tau(bond_type, min_data_points=min_data_points)
+        factors_df = self._batch_fit_factors(data, tau, min_data_points=min_data_points)
 
-            try:
-                # Fit model for this date
-                model.fit(valid_maturities, valid_yields, initial_guess=warm_start)
-                factors = model.get_factors()
-
-                factors_series = pd.Series({
-                    'Level': factors['Level'],
-                    'Slope': factors['Slope'],
-                    'Curvature': factors['Curvature'],
-                    'Tau': factors['Tau']
-                }, name=date)
-
-                factors_list.append(factors_series)
-                warm_start = (
-                    float(model.parameters["beta0"]),
-                    float(model.parameters["beta1"]),
-                    float(model.parameters["beta2"]),
-                    float(model.parameters["tau"]),
-                )
-
-            except Exception:
-                failed_dates.append(date)
-                continue
-
-        if not factors_list:
+        if factors_df.empty:
             raise ValueError(f"Could not fit model for any dates in {bond_type} data")
 
-        factors_df = pd.DataFrame(factors_list)
-
         if verbose:
-            print(f"Successfully fitted {len(factors_df)} out of {total_dates} dates")
-            if failed_dates:
-                print(f"Failed dates: {len(failed_dates)} ({100*len(failed_dates)/total_dates:.1f}%)")
+            print(f"Successfully fitted {len(factors_df)} out of {len(data)} dates")
+            failed = len(data) - len(factors_df)
+            if failed:
+                print(f"Failed dates: {failed} ({100*failed/len(data):.1f}%)")
 
         return factors_df
     
